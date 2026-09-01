@@ -1042,7 +1042,15 @@ HTTP 401/403 means the key was rejected, 402 indicates insufficient credit, and 
 
 ### Deepgram timeout or network error
 
-Confirm the machine can reach `https://api.deepgram.com` over HTTPS. Increase `[deepgram] timeout_secs` if a proxy or slow connection routinely exceeds 30 seconds. Voxtype never retries automatically.
+Confirm the machine can reach `https://api.deepgram.com` over HTTPS and WSS. Increase `[deepgram] timeout_secs` if a proxy or slow connection routinely exceeds 30 seconds. Voxtype never retries automatically.
+
+### Deepgram streaming stops without trailing words
+
+Voxtype waits up to five seconds after sending Deepgram's `Finalize` and `CloseStream` messages. Check the journal for a finalization timeout or network error. Set `streaming = false` to return immediately to the batch WAV path while diagnosing the connection.
+
+### Deepgram interim text changes while typing
+
+Set `[deepgram] type_partials = false` to type only stable finalized segments. Interim hypotheses are intentionally revisable; finalized-only output is the recommended default for dictation.
 
 ### Deepgram returns an empty or malformed result
 

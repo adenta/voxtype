@@ -11,7 +11,7 @@
 //! - Optionally Paraformer via ONNX Runtime (when `paraformer` feature is enabled)
 //! - Optionally Dolphin via ONNX Runtime (when `dolphin` feature is enabled)
 //! - Optionally Omnilingual via ONNX Runtime (when `omnilingual` feature is enabled)
-//! - Deepgram batch transcription over HTTPS (available in every binary)
+//! - Deepgram batch HTTPS and live WebSocket transcription (available in every binary)
 
 pub mod audio;
 pub mod cli;

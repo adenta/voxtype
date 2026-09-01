@@ -67,7 +67,7 @@ pub enum TranscriptionEngine {
     Cohere,
     /// Use Soniox (cloud streaming WebSocket STT).
     Soniox,
-    /// Use Deepgram's pre-recorded cloud speech-to-text API.
+    /// Use Deepgram's batch or streaming cloud speech-to-text API.
     Deepgram,
 }
 

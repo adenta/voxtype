@@ -168,6 +168,7 @@ impl StreamingSession {
         post_output_command: Option<&str>,
     ) -> Result<(), OutputError> {
         if text.is_empty() {
+            self.finalized_text.push_str(&self.partial);
             self.clear_partial();
             return Ok(());
         }
@@ -248,11 +249,12 @@ impl StreamingSession {
             };
             output_with_fallback(chain, text, opts).await?;
             self.typed_chars += text.chars().count();
-            // Treat the (now-truncated) partial + new text as committed,
-            // matching commit_segment's accounting.
-            let finalized_tail = format!("{}{}", self.partial, text);
-            self.finalized_text.push_str(&finalized_tail);
         }
+        // Treat the (now-truncated) partial plus any replacement text as
+        // committed. `text` may be empty when the final transcript is a
+        // shorter prefix of an already-typed interim hypothesis.
+        let finalized_tail = format!("{}{}", self.partial, text);
+        self.finalized_text.push_str(&finalized_tail);
         self.clear_partial();
         Ok(())
     }
@@ -470,6 +472,25 @@ mod tests {
             .unwrap();
         assert!(rec.typed().is_empty());
         assert_eq!(session.typed_chars(), 0);
+    }
+
+    #[tokio::test]
+    async fn empty_final_commits_an_already_typed_partial() {
+        let rec = std::sync::Arc::new(RecordingOutput::new());
+        let chain = chain_with(rec.clone());
+        let mut session = StreamingSession::new();
+        session
+            .type_partial_delta(&chain, "hello".into(), None, None)
+            .await
+            .unwrap();
+        session
+            .commit_segment(&chain, "", None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(rec.typed(), vec!["hello".to_string()]);
+        assert_eq!(session.finalized_text(), "hello");
+        assert_eq!(session.typed_chars(), 5);
+        assert_eq!(session.partial(), "");
     }
 
     #[tokio::test]

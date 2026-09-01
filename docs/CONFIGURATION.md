@@ -46,7 +46,7 @@ Selects which speech-to-text engine to use for transcription.
 - `dolphin` - Dictation-optimized CTC via ONNX Runtime (Chinese + English)
 - `omnilingual` - FunASR Omnilingual CTC via ONNX Runtime (50+ languages)
 - `cohere` - Cohere Transcribe encoder-decoder via ONNX Runtime (#1 Open ASR Leaderboard, 14 languages, ~3 GB model)
-- `deepgram` - Deepgram pre-recorded HTTPS API (batch cloud transcription, built in)
+- `deepgram` - Deepgram batch HTTPS or live WebSocket cloud transcription (built in)
 - `soniox` - Soniox WebSocket/REST cloud transcription (built in)
 
 **Example:**
