@@ -1046,11 +1046,11 @@ Confirm the machine can reach `https://api.deepgram.com` over HTTPS and WSS. Inc
 
 ### Deepgram streaming stops without trailing words
 
-Voxtype waits up to five seconds after sending Deepgram's `Finalize` and `CloseStream` messages. Check the journal for a finalization timeout or network error. Set `streaming = false` to return immediately to the batch WAV path while diagnosing the connection.
+Voxtype stops microphone capture, drains its queued audio and resampler tail, then waits up to five seconds after sending Deepgram's `Finalize` and `CloseStream` messages. Check the journal for an audio-forwarder, finalization-timeout, or network error. Set `streaming = false` to return to the batch WAV path while diagnosing the connection.
 
 ### Deepgram interim text changes while typing
 
-Set `[deepgram] type_partials = false` to type only stable finalized segments. Interim hypotheses are intentionally revisable; finalized-only output is the recommended default for dictation.
+Set `[deepgram] type_partials = false` to buffer stable finalized segments and insert one assembled result after stopping. Interim hypotheses are intentionally revisable; buffered output is the recommended default for dictation.
 
 ### Deepgram returns an empty or malformed result
 

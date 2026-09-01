@@ -557,10 +557,11 @@ pub fn spawn_emitter(
 /// `streaming_tx`, used by the streaming transcription pipeline to feed
 /// audio into a backend without disturbing the OSD level emitter.
 ///
-/// When `streaming_tx` is `Some`, each chunk is cloned and `try_send`'d to
-/// it. Failure to send (closed receiver, full bounded channel) is logged at
-/// trace and never blocks the level emitter. When `streaming_tx` is `None`,
-/// behavior is identical to [`spawn_emitter`].
+/// When `streaming_tx` is `Some`, every chunk is forwarded with backpressure.
+/// This task is the sole owner of that sender, so its completion proves the
+/// capture channel was drained and closing it tells the backend that every
+/// forwarded sample has been consumed. When `streaming_tx` is `None`, behavior
+/// is identical to [`spawn_emitter`].
 pub fn spawn_emitter_with_streaming_tap(
     mut chunk_rx: mpsc::Receiver<Vec<f32>>,
     sink: FrameSink,
@@ -580,8 +581,8 @@ pub fn spawn_emitter_with_streaming_tap(
             }
 
             if let Some(ref tx) = streaming_tx {
-                if let Err(e) = tx.try_send(chunk) {
-                    tracing::trace!("streaming sample tap try_send failed: {}", e);
+                if let Err(e) = tx.send(chunk).await {
+                    tracing::trace!("streaming sample tap send failed: {}", e);
                 }
             }
         }
@@ -729,6 +730,34 @@ mod tests {
         let dir = TempDir::new().expect("create tempdir");
         let path = dir.path().join("audio.sock");
         (dir, path)
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn streaming_tap_forwards_every_queued_chunk_before_closing() {
+        let _guard = HUB_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_tmp, path) = temp_socket_dir();
+        let hub = LevelHub::start(path).await.expect("start hub");
+        let (capture_tx, capture_rx) = mpsc::channel(4);
+        let (streaming_tx, mut streaming_rx) = mpsc::channel(1);
+        let emitter =
+            spawn_emitter_with_streaming_tap(capture_rx, hub.frame_sink(), Some(streaming_tx));
+
+        let first = vec![0.1_f32; SAMPLES_PER_FRAME];
+        let second = vec![0.2_f32; SAMPLES_PER_FRAME];
+        capture_tx.send(first.clone()).await.unwrap();
+        capture_tx.send(second.clone()).await.unwrap();
+        drop(capture_tx);
+
+        // Let the forwarder fill the one-slot output channel. A lossy
+        // try_send implementation would discard `second` at this point.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        assert_eq!(streaming_rx.recv().await, Some(first));
+        assert_eq!(streaming_rx.recv().await, Some(second));
+        emitter.await.expect("emitter task");
+        assert_eq!(streaming_rx.recv().await, None);
+        hub.cleanup();
     }
 
     /// Smoke: starting the hub binds the socket and a client can connect.

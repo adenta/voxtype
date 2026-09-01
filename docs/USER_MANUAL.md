@@ -485,7 +485,7 @@ smart_format = true
 mip_opt_out = true
 ```
 
-With streaming enabled, Voxtype sends PCM audio while recording and types finalized segments as they arrive. Set `streaming = false` to upload one completed WAV after recording stops. See [DEEPGRAM.md](DEEPGRAM.md) for credentials, privacy, language detection, and error handling.
+With streaming enabled, Voxtype sends PCM audio while recording, assembles finalized segments in memory, and inserts the result once after you stop. Set `type_partials = true` only for revisable live typing, or `streaming = false` to upload one completed WAV after recording stops. See [DEEPGRAM.md](DEEPGRAM.md) for credentials, privacy, language detection, and error handling.
 
 ### Cloud Backend: Soniox
 
