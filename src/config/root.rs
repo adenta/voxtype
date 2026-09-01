@@ -62,7 +62,7 @@ pub struct Config {
     #[serde(default)]
     pub soniox: Option<SonioxConfig>,
 
-    /// Deepgram cloud batch STT configuration
+    /// Deepgram cloud batch or streaming STT configuration
     /// (optional, only used when engine = "deepgram")
     #[serde(default)]
     pub deepgram: Option<DeepgramConfig>,
@@ -153,6 +153,9 @@ impl Config {
                 .as_ref()
                 .map(|s| s.streaming && !s.async_api)
                 .unwrap_or(false),
+            TranscriptionEngine::Deepgram => {
+                self.deepgram.as_ref().map(|d| d.streaming).unwrap_or(false)
+            }
             _ => false,
         }
     }
@@ -452,6 +455,18 @@ mod tests {
     use super::super::hotkey::default_hotkey_key;
     use super::super::{ActivationMode, OutputMode};
     use super::*;
+
+    #[test]
+    fn deepgram_streaming_active_requires_explicit_opt_in() {
+        let mut cfg = Config {
+            engine: TranscriptionEngine::Deepgram,
+            deepgram: Some(DeepgramConfig::default()),
+            ..Config::default()
+        };
+        assert!(!cfg.streaming_active());
+        cfg.deepgram.as_mut().unwrap().streaming = true;
+        assert!(cfg.streaming_active());
+    }
 
     #[test]
     fn meeting_mode_forces_soniox_async_when_user_had_realtime() {

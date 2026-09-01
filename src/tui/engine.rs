@@ -118,9 +118,12 @@ pub struct AllFields {
     pub co_on_demand_loading: bool,
     pub co_section_existed: bool,
 
-    // Deepgram (cloud batch STT)
+    // Deepgram (cloud batch/streaming STT)
     pub dg_model: String,
     pub dg_language: String,
+    pub dg_streaming: bool,
+    pub dg_type_partials: bool,
+    pub dg_endpointing_ms: i64,
     pub dg_smart_format: bool,
     pub dg_mip_opt_out: bool,
     pub dg_timeout_secs: i64,
@@ -201,6 +204,9 @@ pub enum FieldId {
     // Deepgram
     DgModel,
     DgLanguage,
+    DgStreaming,
+    DgTypePartials,
+    DgEndpointing,
     DgSmartFormat,
     DgMipOptOut,
     DgTimeout,
@@ -290,6 +296,9 @@ fn rows_for_engine_with_mode(engine: &str, whisper_mode: &str) -> Vec<FieldId> {
         "deepgram" => rows.extend_from_slice(&[
             FieldId::DgModel,
             FieldId::DgLanguage,
+            FieldId::DgStreaming,
+            FieldId::DgTypePartials,
+            FieldId::DgEndpointing,
             FieldId::DgSmartFormat,
             FieldId::DgMipOptOut,
             FieldId::DgTimeout,
@@ -409,6 +418,9 @@ impl EngineState {
             dg_language: ed
                 .get_string("deepgram", "language")
                 .unwrap_or_else(|| "en".to_string()),
+            dg_streaming: ed.get_bool("deepgram", "streaming").unwrap_or(false),
+            dg_type_partials: ed.get_bool("deepgram", "type_partials").unwrap_or(false),
+            dg_endpointing_ms: ed.get_int("deepgram", "endpointing_ms").unwrap_or(300),
             dg_smart_format: ed.get_bool("deepgram", "smart_format").unwrap_or(true),
             dg_mip_opt_out: ed.get_bool("deepgram", "mip_opt_out").unwrap_or(true),
             dg_timeout_secs: ed.get_int("deepgram", "timeout_secs").unwrap_or(30),
@@ -647,6 +659,9 @@ impl EngineState {
         if self.engine == "deepgram" || f.dg_section_existed {
             ed.set_string("deepgram", "model", &f.dg_model);
             ed.set_string("deepgram", "language", &f.dg_language);
+            ed.set_bool("deepgram", "streaming", f.dg_streaming);
+            ed.set_bool("deepgram", "type_partials", f.dg_type_partials);
+            ed.set_int("deepgram", "endpointing_ms", f.dg_endpointing_ms);
             ed.set_bool("deepgram", "smart_format", f.dg_smart_format);
             ed.set_bool("deepgram", "mip_opt_out", f.dg_mip_opt_out);
             ed.set_int("deepgram", "timeout_secs", f.dg_timeout_secs);
@@ -915,6 +930,11 @@ impl EngineState {
             }
             FieldId::DgLanguage => {
                 f.dg_language = cycle_str(DEEPGRAM_LANG_CHOICES, &f.dg_language, delta)
+            }
+            FieldId::DgStreaming => f.dg_streaming = !f.dg_streaming,
+            FieldId::DgTypePartials => f.dg_type_partials = !f.dg_type_partials,
+            FieldId::DgEndpointing => {
+                f.dg_endpointing_ms = (f.dg_endpointing_ms + delta as i64 * 50).clamp(50, 10_000)
             }
             FieldId::DgSmartFormat => f.dg_smart_format = !f.dg_smart_format,
             FieldId::DgMipOptOut => f.dg_mip_opt_out = !f.dg_mip_opt_out,
@@ -1320,6 +1340,12 @@ fn field_label_value(state: &EngineState, fid: FieldId) -> (&'static str, String
             },
         ),
         FieldId::DgLanguage => ("Deepgram · language", f.dg_language.clone()),
+        FieldId::DgStreaming => ("Deepgram · streaming", yesno(f.dg_streaming)),
+        FieldId::DgTypePartials => ("Deepgram · type interim results", yesno(f.dg_type_partials)),
+        FieldId::DgEndpointing => (
+            "Deepgram · endpointing silence",
+            format!("{}ms", f.dg_endpointing_ms),
+        ),
         FieldId::DgSmartFormat => ("Deepgram · smart format", yesno(f.dg_smart_format)),
         FieldId::DgMipOptOut => (
             "Deepgram · model improvement opt-out",
@@ -1770,7 +1796,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
         FieldId::DgModel => vec![
             heading("Deepgram · model"),
             Line::from(""),
-            Line::from("Deepgram model identifier. nova-3 is the recommended general-purpose batch model."),
+            Line::from("Deepgram model identifier. nova-3 is recommended for batch and streaming dictation."),
             Line::from(""),
             Line::from(Span::styled(
                 "Press Enter to edit.",
@@ -1783,6 +1809,25 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
             Line::from("Use a BCP-47 language code, auto to detect one language per recording, or multi for code-switching."),
             Line::from(""),
             Line::from("A fixed language such as en usually improves latency and short-utterance accuracy."),
+        ],
+        FieldId::DgStreaming => vec![
+            heading("Deepgram · streaming"),
+            Line::from(""),
+            Line::from("Send microphone audio while recording and type finalized segments as they arrive."),
+            Line::from(""),
+            Line::from("Disable this to use the original batch WAV request after recording stops."),
+        ],
+        FieldId::DgTypePartials => vec![
+            heading("Deepgram · type interim results"),
+            Line::from(""),
+            Line::from("Type revisable interim hypotheses for the lowest visible latency."),
+            Line::from(""),
+            Line::from("Leave disabled for stable finalized-only cursor output."),
+        ],
+        FieldId::DgEndpointing => vec![
+            heading("Deepgram · endpointing silence"),
+            Line::from(""),
+            Line::from("Milliseconds of silence before Deepgram finalizes an utterance. Default: 300ms."),
         ],
         FieldId::DgSmartFormat => vec![
             heading("Deepgram · smart format"),
@@ -1802,7 +1847,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
         FieldId::DgEndpoint => vec![
             heading("Deepgram · endpoint"),
             Line::from(""),
-            Line::from("Pre-recorded STT endpoint. HTTPS is required except for localhost testing."),
+            Line::from("Shared STT endpoint. Streaming derives WSS from HTTPS automatically."),
             Line::from(""),
             Line::from("Use api.eu.deepgram.com or api.au.deepgram.com here when regional processing is required."),
         ],

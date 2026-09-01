@@ -1,10 +1,10 @@
-//! Deepgram batch speech-to-text engine configuration.
+//! Deepgram batch and streaming speech-to-text engine configuration.
 
 use serde::{Deserialize, Serialize};
 
 use super::super::default_true;
 
-/// Deepgram pre-recorded speech-to-text configuration.
+/// Deepgram speech-to-text configuration.
 ///
 /// Credentials are resolved from `DEEPGRAM_API_KEY` first. `api_key` exists
 /// as a fallback for environments where injecting an environment variable is
@@ -36,8 +36,23 @@ pub struct DeepgramConfig {
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 
-    /// Pre-recorded transcription endpoint. Configurable for regional and
-    /// self-hosted deployments as well as deterministic local tests.
+    /// Stream microphone audio over WebSocket while recording.
+    /// Defaults to false to preserve the pre-recorded batch workflow.
+    #[serde(default)]
+    pub streaming: bool,
+
+    /// Type revisable interim hypotheses as they arrive.
+    /// Finalized segments are always typed in streaming mode.
+    #[serde(default)]
+    pub type_partials: bool,
+
+    /// Silence in milliseconds before Deepgram finalizes an utterance.
+    #[serde(default = "default_endpointing_ms")]
+    pub endpointing_ms: u64,
+
+    /// Transcription endpoint. Streaming derives the equivalent WebSocket URL
+    /// by replacing HTTPS with WSS. Configurable for regional and self-hosted
+    /// deployments as well as deterministic local tests.
     #[serde(default = "default_endpoint")]
     pub endpoint: String,
 }
@@ -54,6 +69,10 @@ fn default_timeout_secs() -> u64 {
     30
 }
 
+fn default_endpointing_ms() -> u64 {
+    300
+}
+
 fn default_endpoint() -> String {
     "https://api.deepgram.com/v1/listen".to_string()
 }
@@ -67,6 +86,9 @@ impl Default for DeepgramConfig {
             smart_format: true,
             mip_opt_out: true,
             timeout_secs: default_timeout_secs(),
+            streaming: false,
+            type_partials: false,
+            endpointing_ms: default_endpointing_ms(),
             endpoint: default_endpoint(),
         }
     }
@@ -84,6 +106,9 @@ mod tests {
         assert!(config.smart_format);
         assert!(config.mip_opt_out);
         assert_eq!(config.timeout_secs, 30);
+        assert!(!config.streaming);
+        assert!(!config.type_partials);
+        assert_eq!(config.endpointing_ms, 300);
         assert_eq!(config.endpoint, "https://api.deepgram.com/v1/listen");
     }
 
@@ -94,5 +119,19 @@ mod tests {
         assert_eq!(config.language, "multi");
         assert!(config.smart_format);
         assert!(config.mip_opt_out);
+        assert!(!config.streaming);
+        assert!(!config.type_partials);
+        assert_eq!(config.endpointing_ms, 300);
+    }
+
+    #[test]
+    fn streaming_fields_round_trip() {
+        let config: DeepgramConfig =
+            toml::from_str("streaming = true\ntype_partials = true\nendpointing_ms = 450").unwrap();
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: DeepgramConfig = toml::from_str(&encoded).unwrap();
+        assert!(decoded.streaming);
+        assert!(decoded.type_partials);
+        assert_eq!(decoded.endpointing_ms, 450);
     }
 }

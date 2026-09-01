@@ -5,6 +5,16 @@ use std::io::Cursor;
 
 pub const SAMPLE_RATE: u32 = 16_000;
 
+/// Convert mono floating-point samples into little-endian signed 16-bit PCM.
+pub fn encode_pcm_s16le(samples: &[f32]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(samples.len() * 2);
+    for &sample in samples {
+        let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    output
+}
+
 /// Encode 16 kHz mono floating-point samples as PCM signed 16-bit WAV.
 pub fn encode_wav_s16le(samples: &[f32]) -> Result<Vec<u8>, TranscribeError> {
     let spec = hound::WavSpec {
@@ -49,5 +59,14 @@ mod tests {
         let wav = encode_wav_s16le(&[-2.0, 2.0]).unwrap();
         assert_eq!(i16::from_le_bytes([wav[44], wav[45]]), i16::MIN + 1);
         assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), i16::MAX);
+    }
+
+    #[test]
+    fn pcm_is_little_endian_and_clamped() {
+        let pcm = encode_pcm_s16le(&[-2.0, 0.5, 2.0]);
+        assert_eq!(pcm.len(), 6);
+        assert_eq!(i16::from_le_bytes([pcm[0], pcm[1]]), -32767);
+        assert_eq!(i16::from_le_bytes([pcm[2], pcm[3]]), 16384);
+        assert_eq!(i16::from_le_bytes([pcm[4], pcm[5]]), 32767);
     }
 }

@@ -428,6 +428,36 @@ pub const CONFIG_KEYS: &[KeySpec] = &[
     )
     .for_engine("deepgram"),
     spec(
+        "deepgram.streaming",
+        "deepgram",
+        "streaming",
+        KeyType::Bool,
+        "Engine",
+        "Streaming",
+        "Stream microphone audio to Deepgram while recording instead of uploading a completed WAV.",
+    )
+    .for_engine("deepgram"),
+    spec(
+        "deepgram.type_partials",
+        "deepgram",
+        "type_partials",
+        KeyType::Bool,
+        "Engine",
+        "Type interim results",
+        "Type revisable interim hypotheses; finalized segments are always typed.",
+    )
+    .for_engine("deepgram"),
+    spec(
+        "deepgram.endpointing_ms",
+        "deepgram",
+        "endpointing_ms",
+        KeyType::Int { min: 1, max: 10000 },
+        "Engine",
+        "Endpointing silence",
+        "Milliseconds of silence before Deepgram finalizes an utterance.",
+    )
+    .for_engine("deepgram"),
+    spec(
         "deepgram.smart_format",
         "deepgram",
         "smart_format",
@@ -1624,6 +1654,9 @@ pub fn resolve(key: &str, cfg: &Config) -> Option<Json> {
 
         "deepgram.model" => json!(dg().model),
         "deepgram.language" => json!(dg().language),
+        "deepgram.streaming" => json!(dg().streaming),
+        "deepgram.type_partials" => json!(dg().type_partials),
+        "deepgram.endpointing_ms" => json!(dg().endpointing_ms),
         "deepgram.smart_format" => json!(dg().smart_format),
         "deepgram.mip_opt_out" => json!(dg().mip_opt_out),
         "deepgram.timeout_secs" => json!(dg().timeout_secs),

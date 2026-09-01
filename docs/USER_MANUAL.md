@@ -470,7 +470,7 @@ on_transcription = true
 
 ### Cloud Backend: Deepgram
 
-Deepgram provides batch transcription without running a model on your computer. It ships in every Voxtype binary. Set `DEEPGRAM_API_KEY`, then configure:
+Deepgram provides batch or streaming transcription without running a model on your computer. It ships in every Voxtype binary. Set `DEEPGRAM_API_KEY`, then configure:
 
 ```toml
 engine = "deepgram"
@@ -478,11 +478,14 @@ engine = "deepgram"
 [deepgram]
 model = "nova-3"
 language = "en"
+streaming = true
+type_partials = false
+endpointing_ms = 300
 smart_format = true
 mip_opt_out = true
 ```
 
-Voxtype uploads one completed WAV after recording stops, then inserts the final transcript through the normal cursor-output path. See [DEEPGRAM.md](DEEPGRAM.md) for credentials, privacy, language detection, and error handling.
+With streaming enabled, Voxtype sends PCM audio while recording and types finalized segments as they arrive. Set `streaming = false` to upload one completed WAV after recording stops. See [DEEPGRAM.md](DEEPGRAM.md) for credentials, privacy, language detection, and error handling.
 
 ### Cloud Backend: Soniox
 
