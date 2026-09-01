@@ -1813,7 +1813,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
         FieldId::DgStreaming => vec![
             heading("Deepgram · streaming"),
             Line::from(""),
-            Line::from("Send microphone audio while recording and type finalized segments as they arrive."),
+            Line::from("Send microphone audio while recording so transcription is ready quickly after stopping."),
             Line::from(""),
             Line::from("Disable this to use the original batch WAV request after recording stops."),
         ],
@@ -1822,7 +1822,7 @@ fn guidance(state: &EngineState) -> Vec<Line<'_>> {
             Line::from(""),
             Line::from("Type revisable interim hypotheses for the lowest visible latency."),
             Line::from(""),
-            Line::from("Leave disabled for stable finalized-only cursor output."),
+            Line::from("Leave disabled to buffer finalized text and insert it once after stopping."),
         ],
         FieldId::DgEndpointing => vec![
             heading("Deepgram · endpointing silence"),

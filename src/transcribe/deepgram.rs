@@ -84,6 +84,42 @@ struct DeepgramReconciler {
     segment_id: SegmentId,
 }
 
+#[derive(Debug, Default)]
+struct DeepgramFinalBuffer {
+    text: String,
+    last_final_start_ms: Option<u64>,
+}
+
+impl DeepgramFinalBuffer {
+    fn push(&mut self, transcript: &str, start: f64) {
+        let transcript = transcript.trim();
+        if transcript.is_empty() {
+            return;
+        }
+
+        let start_ms = (start.max(0.0) * 1000.0).round() as u64;
+        if self.last_final_start_ms == Some(start_ms) {
+            return;
+        }
+        self.last_final_start_ms = Some(start_ms);
+
+        let punctuation_continuation = transcript.chars().next().is_some_and(|character| {
+            matches!(
+                character,
+                '.' | ',' | '!' | '?' | ';' | ':' | '%' | ')' | ']' | '}'
+            )
+        });
+        if !self.text.is_empty() && !punctuation_continuation {
+            self.text.push(' ');
+        }
+        self.text.push_str(transcript);
+    }
+
+    fn take(&mut self) -> String {
+        std::mem::take(&mut self.text)
+    }
+}
+
 impl DeepgramReconciler {
     fn normalize_segment(&self, text: &str) -> String {
         let text = text.trim();
@@ -179,12 +215,13 @@ impl DeepgramTranscriber {
             })?;
 
         tracing::info!(
-            "Deepgram backend configured: endpoint={}, model={}, language={}, streaming={}, type_partials={}, smart_format={}, mip_opt_out={}, timeout={}s",
+            "Deepgram backend configured: endpoint={}, model={}, language={}, streaming={}, type_partials={}, buffered_output={}, smart_format={}, mip_opt_out={}, timeout={}s",
             config.endpoint,
             config.model,
             config.language,
             config.streaming,
             config.type_partials,
+            config.streaming && !config.type_partials,
             config.smart_format,
             config.mip_opt_out,
             config.timeout_secs,
@@ -420,8 +457,10 @@ async fn run_streaming_session(
 
     let (mut write, mut read) = websocket.split();
     let mut reconciler = DeepgramReconciler::default();
+    let mut final_buffer = DeepgramFinalBuffer::default();
     let mut samples_closed = false;
     let mut drain_deadline = None;
+    let mut completed_normally = false;
 
     loop {
         let drain_timer = async {
@@ -493,6 +532,8 @@ async fn run_streaming_session(
                                     "Deepgram streaming connection closed unexpectedly".into(),
                                 ),
                             ).await;
+                        } else {
+                            completed_normally = true;
                         }
                         break;
                     }
@@ -534,17 +575,22 @@ async fn run_streaming_session(
                                 .and_then(|channel| channel.alternatives.first())
                                 .map(|alternative| alternative.transcript.as_str())
                                 .unwrap_or_default();
-                            for event in reconciler.process(
-                                transcript,
-                                parsed.is_final,
-                                parsed.start,
-                                type_partials,
-                            ) {
-                                if events_tx.send(event).await.is_err() {
-                                    break;
+                            if type_partials {
+                                for event in reconciler.process(
+                                    transcript,
+                                    parsed.is_final,
+                                    parsed.start,
+                                    true,
+                                ) {
+                                    if events_tx.send(event).await.is_err() {
+                                        break;
+                                    }
                                 }
+                            } else if parsed.is_final {
+                                final_buffer.push(transcript, parsed.start);
                             }
                         } else if parsed.kind == "Metadata" && samples_closed {
+                            completed_normally = true;
                             break;
                         }
                     }
@@ -562,6 +608,8 @@ async fn run_streaming_session(
                                     "Deepgram streaming connection closed unexpectedly".into(),
                                 ),
                             ).await;
+                        } else {
+                            completed_normally = true;
                         }
                         break;
                     }
@@ -572,6 +620,17 @@ async fn run_streaming_session(
     }
 
     let _ = write.send(Message::Close(None)).await;
+    if completed_normally && !type_partials {
+        let text = final_buffer.take();
+        if !text.is_empty() {
+            let _ = events_tx
+                .send(StreamingEvent::Final {
+                    text,
+                    segment_id: 0,
+                })
+                .await;
+        }
+    }
     let _ = events_tx.send(StreamingEvent::Ended).await;
     Ok(())
 }
@@ -871,6 +930,19 @@ mod tests {
     }
 
     #[test]
+    fn final_buffer_joins_segments_and_suppresses_duplicate_ranges() {
+        let mut buffer = DeepgramFinalBuffer::default();
+        buffer.push("The quick brown fox", 0.0);
+        buffer.push("jumped over the lazy dog", 1.25);
+        buffer.push("jumped over the lazy dog", 1.25);
+        buffer.push(", then rested.", 2.5);
+        assert_eq!(
+            buffer.take(),
+            "The quick brown fox jumped over the lazy dog, then rested."
+        );
+    }
+
+    #[test]
     fn parses_transcript_and_rejects_empty_transcript() {
         let body =
             r#"{"results":{"channels":[{"alternatives":[{"transcript":" hello world "}]}]}}"#;
@@ -1036,6 +1108,15 @@ mod tests {
             task,
         } = transcriber.start_stream(samples_rx).unwrap();
         samples_tx.send(vec![-1.0, 0.0, 1.0]).await.unwrap();
+
+        // Deepgram may finalize segments while the microphone is still open,
+        // but finalized-only mode deliberately commits nothing to Voxtype's
+        // output pipeline until the user stops recording.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), events.recv())
+                .await
+                .is_err()
+        );
         drop(samples_tx);
 
         let mut finals = Vec::new();
@@ -1058,7 +1139,7 @@ mod tests {
         assert_eq!(pcm, encode_pcm_s16le(&[-1.0, 0.0, 1.0]));
         assert!(saw_finalize);
         assert!(saw_close_stream);
-        assert_eq!(finals, vec!["hello", " world"]);
+        assert_eq!(finals, vec!["hello world"]);
         let request = request_capture.lock().unwrap().clone();
         assert!(request.contains("model=nova-3"));
         assert!(request.contains("encoding=linear16"));

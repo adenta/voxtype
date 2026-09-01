@@ -187,12 +187,12 @@ translate = false
 # Select with the root setting: engine = "deepgram"
 # Credentials: set DEEPGRAM_API_KEY (recommended), or add api_key here.
 # Batch mode sends a completed WAV after recording stops. Streaming mode sends
-# 16 kHz mono PCM while recording and types finalized segments as they arrive.
+# 16 kHz mono PCM while recording and inserts the assembled result on stop.
 # [deepgram]
 # model = "nova-3"
 # language = "en"       # BCP-47 code, "auto", or "multi"
 # streaming = false      # true = WebSocket streaming; false = batch WAV
-# type_partials = false  # true = type revisable interim hypotheses
+# type_partials = false  # false = one insertion on stop; true = live revisable typing
 # endpointing_ms = 300   # silence before Deepgram finalizes an utterance
 # smart_format = true
 # mip_opt_out = true

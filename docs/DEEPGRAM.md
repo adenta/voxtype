@@ -21,7 +21,7 @@ endpoint = "https://api.deepgram.com/v1/listen"
 
 `language` accepts a BCP-47 language code such as `en`, `en-US`, or `fr`; `auto` enables language detection; and `multi` enables multilingual recognition. `mip_opt_out = true` asks Deepgram to exclude the request from its Model Improvement Program.
 
-`streaming = false` preserves batch push-to-talk behavior. With `streaming = true`, Voxtype streams 16 kHz mono PCM while recording and uses its existing streaming output pipeline. `type_partials = false` types only stable finalized segments; enable it to display revisable interim hypotheses. `endpointing_ms` controls how much silence Deepgram waits for before finalizing an utterance.
+`streaming = false` preserves batch push-to-talk behavior. With `streaming = true`, Voxtype streams 16 kHz mono PCM while recording and uses its existing streaming output pipeline. With the default `type_partials = false`, finalized segments are assembled in memory and inserted through Voxtype's normal text-output path once after recording stops. This keeps post-stop latency low without exposing chunk boundaries to the focused application. Set `type_partials = true` only to type revisable interim hypotheses live. `endpointing_ms` controls how much silence Deepgram waits for before finalizing an utterance.
 
 The existing HTTPS `endpoint` is also the source for the streaming URL. Voxtype converts `https` to `wss` internally (and loopback `http` to `ws` for tests), so no separate streaming endpoint is needed.
 
@@ -48,7 +48,7 @@ The configuration TUI reports whether a credential came from the environment or 
 
 In batch mode, Voxtype encodes the completed 16 kHz mono recording as PCM WAV and sends one HTTPS `POST` with `Content-Type: audio/wav` and `Authorization: Token ...`. The final transcript is processed and inserted at the cursor through the same output path as local engines.
 
-In streaming mode, Voxtype opens an authenticated WebSocket, sends raw 16-bit PCM frames during recording, and consumes interim and finalized results. Stopping sends Deepgram `Finalize` and `CloseStream` control messages, then drains trailing finalized text before returning to idle. Cancelling closes the stream without committing later results.
+In streaming mode, Voxtype opens an authenticated WebSocket, sends raw 16-bit PCM frames during recording, and consumes interim and finalized results. Stopping first drains Voxtype's capture and resampler channels, then sends Deepgram `Finalize` and `CloseStream` control messages, drains trailing finalized text, and emits one normal Voxtype `Final` event before returning to idle. Cancelling closes immediately without committing buffered audio or results.
 
 Authentication, insufficient-credit, rate-limit, network, timeout, empty-result, and malformed-response failures are surfaced as transcription errors. No automatic retry is performed, so a repeated hotkey press cannot accidentally duplicate text.
 

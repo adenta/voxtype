@@ -160,6 +160,16 @@ impl Config {
         }
     }
 
+    /// Returns true when streaming audio is processed continuously but text is
+    /// committed only once the stream has finished draining.
+    pub fn streaming_buffers_output(&self) -> bool {
+        matches!(self.engine, TranscriptionEngine::Deepgram)
+            && self
+                .deepgram
+                .as_ref()
+                .is_some_and(|deepgram| deepgram.streaming && !deepgram.type_partials)
+    }
+
     /// Clone this config with engine-specific overrides for meeting (long-form)
     /// transcription. Currently:
     ///
@@ -464,8 +474,12 @@ mod tests {
             ..Config::default()
         };
         assert!(!cfg.streaming_active());
+        assert!(!cfg.streaming_buffers_output());
         cfg.deepgram.as_mut().unwrap().streaming = true;
         assert!(cfg.streaming_active());
+        assert!(cfg.streaming_buffers_output());
+        cfg.deepgram.as_mut().unwrap().type_partials = true;
+        assert!(!cfg.streaming_buffers_output());
     }
 
     #[test]

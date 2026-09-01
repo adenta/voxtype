@@ -444,7 +444,7 @@ pub const CONFIG_KEYS: &[KeySpec] = &[
         KeyType::Bool,
         "Engine",
         "Type interim results",
-        "Type revisable interim hypotheses; finalized segments are always typed.",
+        "Type revisable interim hypotheses live; when false, buffer finalized text and insert it once after stopping.",
     )
     .for_engine("deepgram"),
     spec(
