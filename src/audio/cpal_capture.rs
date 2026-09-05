@@ -305,6 +305,12 @@ impl AudioCapture for CpalCapture {
                                     if let Ok(mut s) = samples_clone.lock() {
                                         s.extend_from_slice(&tail);
                                     }
+                                    // Streaming consumers read the chunk
+                                    // channel rather than the accumulated
+                                    // batch buffer. Forward the resampler's
+                                    // delayed tail before the capture thread
+                                    // exits and closes that channel.
+                                    let _ = chunk_tx.blocking_send(tail);
                                 }
                             }
                         }

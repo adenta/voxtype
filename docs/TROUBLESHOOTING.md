@@ -1030,6 +1030,36 @@ model = "tiny.en"
 
 ---
 
+## Deepgram Backend Issues
+
+### "Deepgram API key required"
+
+Set `DEEPGRAM_API_KEY` in the environment of the Voxtype daemon. An optional `[deepgram] api_key` value is supported as a less-safe fallback. The environment variable wins when both are present.
+
+### Deepgram authentication, billing, or rate-limit errors
+
+HTTP 401/403 means the key was rejected, 402 indicates insufficient credit, and 429 means the account is rate limited. Check the Deepgram console, then retry the recording after resolving the account condition.
+
+### Deepgram timeout or network error
+
+Confirm the machine can reach `https://api.deepgram.com` over HTTPS and WSS. Increase `[deepgram] timeout_secs` if a proxy or slow connection routinely exceeds 30 seconds. Voxtype never retries automatically.
+
+### Deepgram streaming stops without trailing words
+
+Voxtype stops microphone capture, drains its queued audio and resampler tail, then waits up to five seconds after sending Deepgram's `Finalize` and `CloseStream` messages. Check the journal for an audio-forwarder, finalization-timeout, or network error. Set `streaming = false` to return to the batch WAV path while diagnosing the connection.
+
+### Deepgram interim text changes while typing
+
+Set `[deepgram] type_partials = false` to buffer stable finalized segments and insert one assembled result after stopping. Interim hypotheses are intentionally revisable; buffered output is the recommended default for dictation.
+
+### Deepgram returns an empty or malformed result
+
+An empty transcript, missing channel alternative, or malformed JSON is reported as a transcription error instead of inserting blank text. Check the journal for the category; Voxtype does not log the request audio or credential.
+
+See [DEEPGRAM.md](DEEPGRAM.md) for the complete provider configuration.
+
+---
+
 ## Soniox Backend Issues
 
 ### "Soniox API key required: set [soniox] api_key or SONIOX_API_KEY"

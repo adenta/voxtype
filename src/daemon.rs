@@ -1252,16 +1252,24 @@ impl Daemon {
         }
     }
 
-    /// Early-stop the streaming capture: cut audio flow to the backend,
-    /// start the OSD silence pump so the visualizer stays alive during
-    /// drain, and stop the mic. Leaves `streaming_session`/`_chain` for
-    /// the caller to disown (or keep, to receive trailing finals).
+    /// Gracefully stop streaming capture. Stopping the microphone closes its
+    /// chunk sender; awaiting the forwarding task then drains every queued
+    /// chunk (including the resampler tail) before its sender to the backend
+    /// is dropped. Only then does the backend finalize the stream.
+    ///
+    /// Cancellation deliberately uses [`Self::cut_streaming_audio`] instead.
     async fn stop_streaming_capture(&mut self, audio_capture: &mut Option<Box<dyn AudioCapture>>) {
-        self.cut_streaming_audio();
-        self.start_streaming_drain_pump();
         if let Some(mut c) = audio_capture.take() {
-            let _ = c.stop().await;
+            if let Err(error) = c.stop().await {
+                tracing::warn!("Failed to stop streaming audio capture cleanly: {}", error);
+            }
         }
+        if let Some(handle) = self.level_emitter_task.take() {
+            if let Err(error) = handle.await {
+                tracing::warn!("Streaming audio forwarder failed while draining: {}", error);
+            }
+        }
+        self.start_streaming_drain_pump();
         self.restore_recording_media();
     }
 
@@ -1394,8 +1402,8 @@ impl Daemon {
                         tokio::spawn(async move {
                             let mut rx = chunk_rx;
                             while let Some(chunk) = rx.recv().await {
-                                if streaming_tx.try_send(chunk).is_err() {
-                                    // Backend slow or gone; drop and keep going.
+                                if streaming_tx.send(chunk).await.is_err() {
+                                    break;
                                 }
                             }
                         })
@@ -1462,7 +1470,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                     if let Some(ref t) = transcriber_preloaded {
                         Ok(t.clone())
                     } else {
@@ -1982,7 +1991,11 @@ impl Daemon {
                 // Task is finished, await will complete immediately
                 match task.await {
                     Ok(Ok(text)) => {
-                        tracing::debug!("Chunk {} completed: {:?}", chunk_index, text);
+                        tracing::debug!(
+                            "Chunk {} completed ({} characters)",
+                            chunk_index,
+                            text.chars().count()
+                        );
                         completed.push(ChunkResult { text, chunk_index });
                     }
                     Ok(Err(e)) => {
@@ -2017,7 +2030,11 @@ impl Daemon {
         for (chunk_index, task) in self.eager_chunk_tasks.drain(..) {
             match task.await {
                 Ok(Ok(text)) => {
-                    tracing::debug!("Chunk {} completed (waited): {:?}", chunk_index, text);
+                    tracing::debug!(
+                        "Chunk {} completed after waiting ({} characters)",
+                        chunk_index,
+                        text.chars().count()
+                    );
                     results.push(ChunkResult { text, chunk_index });
                 }
                 Ok(Err(e)) => {
@@ -2097,7 +2114,10 @@ impl Daemon {
                     .await
                 {
                     Ok(Ok(text)) => {
-                        tracing::debug!("Tail transcription: {:?}", text);
+                        tracing::debug!(
+                            "Tail transcription completed ({} characters)",
+                            text.chars().count()
+                        );
                         chunk_results.push(ChunkResult {
                             text,
                             chunk_index: chunks_sent,
@@ -2115,7 +2135,10 @@ impl Daemon {
 
         // Combine all chunk results
         let combined = eager::combine_chunk_results(chunk_results);
-        tracing::info!("Combined eager transcription: {:?}", combined);
+        tracing::info!(
+            "Combined eager transcription completed ({} characters)",
+            combined.chars().count()
+        );
 
         if combined.is_empty() {
             None
@@ -2259,12 +2282,15 @@ impl Daemon {
                     tracing::debug!("Transcription was empty");
                     self.reset_to_idle(state).await;
                 } else {
-                    tracing::info!("Transcribed: {:?}", text);
+                    tracing::info!(
+                        "Transcription completed ({} characters)",
+                        text.chars().count()
+                    );
 
                     // Apply text processing (replacements, punctuation)
                     let processed_text = self.text_processor.process(&text);
                     if processed_text != text {
-                        tracing::debug!("After text processing: {:?}", processed_text);
+                        tracing::debug!("Text processing changed the transcript");
                     }
 
                     // Smart auto-submit: detect "submit" trigger word at end
@@ -2274,10 +2300,7 @@ impl Daemon {
                         .text_processor
                         .detect_submit(&processed_text, smart_auto_submit_cli);
                     if smart_submit {
-                        tracing::debug!(
-                            "Smart auto-submit triggered, stripped text: {:?}",
-                            processed_text
-                        );
+                        tracing::debug!("Smart auto-submit triggered and stripped its command");
                     }
 
                     // Check for profile override from CLI flags
@@ -2319,12 +2342,20 @@ impl Daemon {
                                 profile_override.as_ref().unwrap(),
                                 recent_context.is_some()
                             );
-                            tracing::debug!("Post-processing context: {:?}", recent_context);
+                            tracing::debug!(
+                                "Post-processing context captured ({} characters)",
+                                recent_context
+                                    .as_deref()
+                                    .map_or(0, |context| context.chars().count())
+                            );
                             let result = profile_processor
                                 .process_with_context(&processed_text, recent_context.as_deref())
                                 .await;
                             tracing::info!("Post-processed: changed: {}", result != processed_text);
-                            tracing::debug!("Post-processed result: {:?}", result);
+                            tracing::debug!(
+                                "Post-processing result contains {} characters",
+                                result.chars().count()
+                            );
                             result
                         } else {
                             // Profile exists but has no post_process_command, use default
@@ -2348,7 +2379,10 @@ impl Daemon {
                                     "Post-processed: changed: {}",
                                     result != processed_text
                                 );
-                                tracing::debug!("Post-processed result: {:?}", result);
+                                tracing::debug!(
+                                    "Post-processing result contains {} characters",
+                                    result.chars().count()
+                                );
                                 result
                             } else {
                                 processed_text
@@ -2368,7 +2402,10 @@ impl Daemon {
                             .process_with_context(&processed_text, recent_context.as_deref())
                             .await;
                         tracing::info!("Post-processed: changed: {}", result != processed_text);
-                        tracing::debug!("Post-processed result: {:?}", result);
+                        tracing::debug!(
+                            "Post-processing result contains {} characters",
+                            result.chars().count()
+                        );
                         result
                     } else {
                         processed_text
@@ -2886,7 +2923,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                     // Non-Whisper engines do their own setup; Soniox just validates
                     // API key + endpoint at construction (no model to download).
                     transcriber_preloaded = Some(Arc::from(crate::transcribe::create_transcriber(
@@ -3006,7 +3044,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                             let config = self.config.clone();
                                             self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                                 crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -3036,7 +3075,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                             if let Some(ref t) = transcriber_preloaded {
                                                 let transcriber = t.clone();
                                                 tokio::task::spawn_blocking(move || {
@@ -3111,14 +3151,16 @@ impl Daemon {
                         (HotkeyEvent::Released, ActivationMode::PushToTalk) => {
                             tracing::debug!("Received HotkeyEvent::Released (push-to-talk), state.is_recording() = {}", state.is_recording());
                             if state.is_streaming() {
-                                tracing::debug!("Streaming push-to-talk released; closing audio capture and disowning session");
+                                tracing::debug!("Streaming push-to-talk released; closing audio capture");
                                 self.stop_streaming_capture(&mut audio_capture).await;
                                 // Drop session/chain so the backend's
                                 // post-stop flush emission is dropped at
                                 // the event pump instead of typed.
                                 // Matches the SIGUSR2 stop path.
-                                streaming_session = None;
-                                streaming_chain = None;
+                                if !self.config.streaming_buffers_output() {
+                                    streaming_session = None;
+                                    streaming_chain = None;
+                                }
                             } else if let State::Recording { model_override, .. } = &state {
                                 let model_override = model_override.clone();
 
@@ -3217,7 +3259,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                             let config = self.config.clone();
                                             self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                                 crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -3247,7 +3290,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                             if let Some(ref t) = transcriber_preloaded {
                                                 let transcriber = t.clone();
                                                 tokio::task::spawn_blocking(move || {
@@ -3688,7 +3732,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                     let config = self.config.clone();
                                     self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                         crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -3717,7 +3762,8 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::Dolphin
                 | crate::config::TranscriptionEngine::Omnilingual
                 | crate::config::TranscriptionEngine::Cohere
-                | crate::config::TranscriptionEngine::Soniox => {
+                | crate::config::TranscriptionEngine::Soniox
+                | crate::config::TranscriptionEngine::Deepgram => {
                                     if let Some(ref t) = transcriber_preloaded {
                                         let transcriber = t.clone();
                                         tokio::task::spawn_blocking(move || {
@@ -3785,16 +3831,16 @@ impl Daemon {
                 _ = sigusr2.recv() => {
                     tracing::debug!("Received SIGUSR2 (stop recording)");
                     if state.is_streaming() {
-                        tracing::info!("SIGUSR2 stop while streaming; closing capture and disowning session");
+                        tracing::info!("SIGUSR2 stop while streaming; closing capture");
                         self.stop_streaming_capture(&mut audio_capture).await;
-                        // Drop the typing surface synchronously so any
-                        // Final/Partial events the backend emits while
-                        // draining its internal buffer reach the event-pump
-                        // arm with `streaming_session = None` and get
-                        // discarded instead of typed into whatever window
-                        // has focus by then.
-                        streaming_session = None;
-                        streaming_chain = None;
+                        // Live-typing backends disown their typing surface
+                        // after stop so late events cannot land in a newly
+                        // focused window. Buffered Deepgram output must keep
+                        // the surface until its single post-drain Final event.
+                        if !self.config.streaming_buffers_output() {
+                            streaming_session = None;
+                            streaming_chain = None;
+                        }
                     } else if let State::Recording { model_override, .. } = &state {
                         let model_override = model_override.clone();
 
