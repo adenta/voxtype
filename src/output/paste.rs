@@ -4,7 +4,7 @@
 //! This works around non-US keyboard layout issues by avoiding direct typing.
 //!
 //! Requires:
-//! - wl-copy installed (for clipboard access)
+//! - wl-copy 2.3.0 or newer installed (for clipboard access)
 //! - wtype OR eitype OR ydotool installed (for keystroke simulation)
 //!   - wtype: Wayland-native, no daemon needed (preferred)
 //!   - eitype: EI protocol, works on GNOME/KDE/Sway with libei
@@ -256,8 +256,9 @@ impl PasteOutput {
             return copy_to_x11_clipboard(text.as_bytes()).await;
         }
 
-        // Spawn wl-copy with stdin pipe
+        // Paste mode uses the clipboard only as transient transport.
         let mut child = Command::new("wl-copy")
+            .arg("--sensitive")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
