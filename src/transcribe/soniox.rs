@@ -45,6 +45,7 @@
 //! The daemon disowns the session on `Error`/`Ended` so post-stop
 //! emissions are dropped (matches the v0.7.2 disown-on-stop fix).
 
+use super::audio::{encode_pcm_s16le, encode_wav_s16le};
 use super::streaming::{SegmentId, StreamHandle, StreamingEvent, StreamingTranscriber};
 use super::Transcriber;
 use crate::config::SonioxConfig;
@@ -284,18 +285,6 @@ fn default_is_final() -> bool {
 /// The returned Vec is consumed by `Message::Binary` via zero-copy
 /// `Vec → Bytes` ownership transfer, so this is the per-chunk allocation
 /// for the WS streaming path.
-fn f32_to_i16(s: f32) -> i16 {
-    (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
-}
-
-fn f32_to_s16le_bytes(samples: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(samples.len() * 2);
-    for &s in samples {
-        out.extend_from_slice(&f32_to_i16(s).to_le_bytes());
-    }
-    out
-}
-
 /// Count the number of Unicode scalars shared as a prefix between
 /// `a` and `b`. Used by the reconciler to compute backspace counts
 /// for tail revisions.
@@ -547,7 +536,7 @@ impl SonioxTranscriber {
         // Send audio in chunks. 32 KiB = ~1s of pcm_s16le at 16 kHz.
         // Soniox examples use ~120ms frames but larger frames work fine
         // for batch.
-        let bytes = f32_to_s16le_bytes(samples);
+        let bytes = encode_pcm_s16le(samples);
         const FRAME_BYTES: usize = 32 * 1024;
         for chunk in bytes.chunks(FRAME_BYTES) {
             write
@@ -637,30 +626,6 @@ impl SonioxTranscriber {
         let _ = write.send(Message::Close(None)).await;
         Ok(transcript.trim().to_string())
     }
-}
-
-/// Encode 16 kHz f32 mono samples as a WAV byte buffer (PCM 16-bit LE)
-/// for upload to the Soniox async API. Mirrors the helper in
-/// `transcribe/remote.rs` so both cloud backends share one WAV format.
-fn encode_wav_s16le(samples: &[f32]) -> Result<Vec<u8>, TranscribeError> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    let mut writer = hound::WavWriter::new(&mut buffer, spec)
-        .map_err(|e| TranscribeError::AudioFormat(format!("WAV writer init: {}", e)))?;
-    for &s in samples {
-        writer
-            .write_sample(f32_to_i16(s))
-            .map_err(|e| TranscribeError::AudioFormat(format!("WAV sample write: {}", e)))?;
-    }
-    writer
-        .finalize()
-        .map_err(|e| TranscribeError::AudioFormat(format!("WAV finalize: {}", e)))?;
-    Ok(buffer.into_inner())
 }
 
 #[derive(Deserialize, Debug)]
@@ -1040,7 +1005,7 @@ async fn run_streaming_session(
             chunk = samples_rx.recv(), if !samples_closed => {
                 match chunk {
                     Some(c) if !c.is_empty() => {
-                        let bytes = f32_to_s16le_bytes(&c);
+                        let bytes = encode_pcm_s16le(&c);
                         if let Err(e) = write.send(Message::Binary(bytes)).await {
                             let _ = events_tx.send(StreamingEvent::Error(
                                 TranscribeError::InferenceFailed(format!(
@@ -1332,7 +1297,7 @@ mod tests {
     #[test]
     fn f32_to_s16le_round_trip_endpoints() {
         let samples = vec![-1.0_f32, 0.0, 1.0];
-        let bytes = f32_to_s16le_bytes(&samples);
+        let bytes = encode_pcm_s16le(&samples);
         assert_eq!(bytes.len(), 6);
         // -1.0 → -32767 (or -32768; clamp + round depends), 0 → 0, 1.0 → 32767
         let s0 = i16::from_le_bytes([bytes[0], bytes[1]]);
@@ -1346,7 +1311,7 @@ mod tests {
     #[test]
     fn f32_to_s16le_clamps_out_of_range() {
         let samples = vec![-2.0_f32, 2.0];
-        let bytes = f32_to_s16le_bytes(&samples);
+        let bytes = encode_pcm_s16le(&samples);
         let s0 = i16::from_le_bytes([bytes[0], bytes[1]]);
         let s1 = i16::from_le_bytes([bytes[2], bytes[3]]);
         // Both clamped: -2.0 → -1.0 → near i16::MIN; 2.0 → 1.0 → near i16::MAX

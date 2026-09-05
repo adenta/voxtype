@@ -183,6 +183,22 @@ translate = false
 # own -l setting (default "en"); enable this so "auto" is sent explicitly.
 # remote_send_auto_language = true
 
+# --- Deepgram cloud transcription (batch or streaming) ---
+# Select with the root setting: engine = "deepgram"
+# Credentials: set DEEPGRAM_API_KEY (recommended), or add api_key here.
+# Batch mode sends a completed WAV after recording stops. Streaming mode sends
+# 16 kHz mono PCM while recording and inserts the assembled result on stop.
+# [deepgram]
+# model = "nova-3"
+# language = "en"       # BCP-47 code, "auto", or "multi"
+# streaming = false      # true = WebSocket streaming; false = batch WAV
+# type_partials = false  # false = one insertion on stop; true = live revisable typing
+# endpointing_ms = 300   # silence before Deepgram finalizes an utterance
+# smart_format = true
+# mip_opt_out = true
+# timeout_secs = 30
+# endpoint = "https://api.deepgram.com/v1/listen"
+
 [output]
 # Primary output mode: "type" or "clipboard"
 # - type: Simulates keyboard input at cursor position (requires ydotool)

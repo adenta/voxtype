@@ -1,7 +1,8 @@
 use super::{
-    AudioConfig, CohereConfig, DolphinConfig, HotkeyConfig, MeetingConfig, MoonshineConfig,
-    OmnilingualConfig, OutputConfig, ParaformerConfig, ParakeetConfig, Profile, SenseVoiceConfig,
-    SonioxConfig, StatusConfig, TextConfig, TranscriptionEngine, VadConfig, WhisperConfig,
+    AudioConfig, CohereConfig, DeepgramConfig, DolphinConfig, HotkeyConfig, MeetingConfig,
+    MoonshineConfig, OmnilingualConfig, OutputConfig, ParaformerConfig, ParakeetConfig, Profile,
+    SenseVoiceConfig, SonioxConfig, StatusConfig, TextConfig, TranscriptionEngine, VadConfig,
+    WhisperConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -61,6 +62,11 @@ pub struct Config {
     #[serde(default)]
     pub soniox: Option<SonioxConfig>,
 
+    /// Deepgram cloud batch or streaming STT configuration
+    /// (optional, only used when engine = "deepgram")
+    #[serde(default)]
+    pub deepgram: Option<DeepgramConfig>,
+
     /// Text processing configuration (replacements, spoken punctuation)
     #[serde(default)]
     pub text: TextConfig,
@@ -113,6 +119,7 @@ impl Default for Config {
             omnilingual: None,
             cohere: None,
             soniox: None,
+            deepgram: None,
             text: TextConfig::default(),
             vad: VadConfig::default(),
             status: StatusConfig::default(),
@@ -146,8 +153,21 @@ impl Config {
                 .as_ref()
                 .map(|s| s.streaming && !s.async_api)
                 .unwrap_or(false),
+            TranscriptionEngine::Deepgram => {
+                self.deepgram.as_ref().map(|d| d.streaming).unwrap_or(false)
+            }
             _ => false,
         }
+    }
+
+    /// Returns true when streaming audio is processed continuously but text is
+    /// committed only once the stream has finished draining.
+    pub fn streaming_buffers_output(&self) -> bool {
+        matches!(self.engine, TranscriptionEngine::Deepgram)
+            && self
+                .deepgram
+                .as_ref()
+                .is_some_and(|deepgram| deepgram.streaming && !deepgram.type_partials)
     }
 
     /// Clone this config with engine-specific overrides for meeting (long-form)
@@ -338,8 +358,8 @@ impl Config {
                 .as_ref()
                 .map(|c| c.on_demand_loading)
                 .unwrap_or(false),
-            // Soniox is a cloud backend; nothing to load on demand.
-            TranscriptionEngine::Soniox => false,
+            // Cloud backends have no local model to load on demand.
+            TranscriptionEngine::Soniox | TranscriptionEngine::Deepgram => false,
         }
     }
 
@@ -361,6 +381,7 @@ impl Config {
                 super::language::LanguageConfig::Multiple(_) => return None,
             },
             TranscriptionEngine::Cohere => self.cohere.as_ref().map(|c| c.language.as_str())?,
+            TranscriptionEngine::Deepgram => self.deepgram.as_ref().map(|d| d.language.as_str())?,
             TranscriptionEngine::SenseVoice => {
                 self.sensevoice.as_ref().map(|s| s.language.as_str())?
             }
@@ -419,6 +440,11 @@ impl Config {
                 .as_ref()
                 .map(|s| s.model.as_str())
                 .unwrap_or("soniox (not configured)"),
+            TranscriptionEngine::Deepgram => self
+                .deepgram
+                .as_ref()
+                .map(|d| d.model.as_str())
+                .unwrap_or("deepgram (not configured)"),
         }
     }
 
@@ -439,6 +465,22 @@ mod tests {
     use super::super::hotkey::default_hotkey_key;
     use super::super::{ActivationMode, OutputMode};
     use super::*;
+
+    #[test]
+    fn deepgram_streaming_active_requires_explicit_opt_in() {
+        let mut cfg = Config {
+            engine: TranscriptionEngine::Deepgram,
+            deepgram: Some(DeepgramConfig::default()),
+            ..Config::default()
+        };
+        assert!(!cfg.streaming_active());
+        assert!(!cfg.streaming_buffers_output());
+        cfg.deepgram.as_mut().unwrap().streaming = true;
+        assert!(cfg.streaming_active());
+        assert!(cfg.streaming_buffers_output());
+        cfg.deepgram.as_mut().unwrap().type_partials = true;
+        assert!(!cfg.streaming_buffers_output());
+    }
 
     #[test]
     fn meeting_mode_forces_soniox_async_when_user_had_realtime() {

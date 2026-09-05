@@ -468,6 +468,25 @@ on_recording_stop = false
 on_transcription = true
 ```
 
+### Cloud Backend: Deepgram
+
+Deepgram provides batch or streaming transcription without running a model on your computer. It ships in every Voxtype binary. Set `DEEPGRAM_API_KEY`, then configure:
+
+```toml
+engine = "deepgram"
+
+[deepgram]
+model = "nova-3"
+language = "en"
+streaming = true
+type_partials = false
+endpointing_ms = 300
+smart_format = true
+mip_opt_out = true
+```
+
+With streaming enabled, Voxtype sends PCM audio while recording, assembles finalized segments in memory, and inserts the result once after you stop. Set `type_partials = true` only for revisable live typing, or `streaming = false` to upload one completed WAV after recording stops. See [DEEPGRAM.md](DEEPGRAM.md) for credentials, privacy, language detection, and error handling.
+
 ### Cloud Backend: Soniox
 
 For a cloud streaming alternative to the local engines above, voxtype supports [Soniox](https://soniox.com). Different trade-off space: paid SaaS, no local model, 60+ languages with strong Hungarian/EU coverage, sub-second partials at the cursor.
