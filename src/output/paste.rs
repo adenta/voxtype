@@ -353,6 +353,7 @@ impl PasteOutput {
         let content_output = Command::new("wl-paste")
             .arg("--type")
             .arg(&mime_type)
+            .arg("--no-newline")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
