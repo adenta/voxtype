@@ -3709,3 +3709,34 @@ The following configuration options are deprecated but still supported for backw
 |-------------------|-------------|-------|
 | `wtype_delay_ms` | `pre_type_delay_ms` | Renamed for clarity (applies to all output drivers, not just wtype) |
 | `--wtype-delay` CLI flag | `--pre-type-delay` | CLI equivalent of the above |
+
+### destination_guard
+
+Type: Boolean. Default: `false`. Linux/Hyprland only.
+
+Set `output.destination_guard = true` to copy dictation instead of automatically
+pasting when the active window changes or Omarchy's `omarchy-polkit`
+authentication overlay appears. Changes are remembered for the entire recording,
+including transcription and paste delays; switching back does not re-enable
+pasting. An authentication overlay already open at recording start also blocks
+insertion. Clipboard delivery leaves the transcript available for manual paste
+and displays a notification even when normal transcription notifications are off.
+A missing/disconnected Hyprland monitor or failed state query also selects
+clipboard delivery and reports the detection failure.
+
+This version requires `output.mode = "paste"`, `engine = "deepgram"`,
+`deepgram.streaming = true`, `deepgram.type_partials = false`, and no
+`output.driver_order` override. Unsupported configurations are rejected.
+A batch fallback without a recording's destination context copies conservatively.
+
+The guard monitors window identities and Omarchy authentication overlays, not
+individual fields inside applications. It does not detect password fields or
+focus changes inside the same webpage, nor arbitrary authentication overlays.
+Focus checking and synthetic input are separate operations, so a change at the
+exact moment of input cannot be ruled out. Normal paste retains the existing
+clipboard-restoration behavior. Disable this setting to restore previous behavior.
+
+Developers can run `cargo test --test destination_guard` for isolated IPC and
+output checks. `cargo run --example destination_guard_probe` waits for a real
+Omarchy authentication prompt and delivers a harmless sample to the clipboard;
+it does not record audio or call Deepgram, but it replaces the clipboard on success.

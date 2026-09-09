@@ -206,6 +206,8 @@ translate = false
 mode = "type"
 
 # Fall back to clipboard if typing fails
+# Optional Hyprland window/authentication guard. Requires buffered Deepgram paste.
+# destination_guard = false
 fallback_to_clipboard = true
 
 # Custom driver order for type mode (optional)

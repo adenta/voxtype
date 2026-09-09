@@ -1163,6 +1163,15 @@ impl Daemon {
             return false;
         }
 
+        // Start before microphone capture; the output chain owns this monitor
+        // through final paste delays and drops it on cancellation.
+        let destination_guard = if self.config.output.destination_guard {
+            Some(Arc::new(
+                output::destination_guard::DestinationGuard::start().await,
+            ))
+        } else {
+            None
+        };
         let (capture, samples_rx) = match self.start_streaming_capture().await {
             Ok(v) => v,
             Err(()) => return false,
@@ -1184,7 +1193,11 @@ impl Daemon {
         *audio_capture = Some(capture);
         *streaming_handle = Some(handle);
         *streaming_session = Some(StreamingSession::new());
-        *streaming_chain = Some(output::create_output_chain(&self.config.output));
+        *streaming_chain = Some(output::create_output_chain_with_guard(
+            &self.config.output,
+            None,
+            destination_guard,
+        ));
         *state = State::Streaming {
             started_at: std::time::Instant::now(),
             model_override,
@@ -2684,6 +2697,7 @@ impl Daemon {
 
     /// Run the daemon main loop
     pub async fn run(&mut self) -> Result<()> {
+        self.config.validate_destination_guard()?;
         tracing::info!("Starting voxtype daemon");
 
         // Engine-vs-binary mismatch check at startup so users see a desktop

@@ -884,6 +884,11 @@ pub const CONFIG_KEYS: &[KeySpec] = &[
     ),
     // -- Output -------------------------------------------------------------
     spec(
+        "output.destination_guard", "output", "destination_guard", KeyType::Bool,
+        "Output", "Guard paste destination",
+        "Copy instead of pasting after a Hyprland window change or Omarchy authentication prompt. Requires buffered Deepgram paste output.",
+    ),
+    spec(
         "output.mode",
         "output",
         "mode",
@@ -1736,6 +1741,7 @@ pub fn resolve(key: &str, cfg: &Config) -> Option<Json> {
         "audio.feedback.volume" => f32_json(cfg.audio.feedback.volume),
 
         "output.mode" => serde_json::to_value(cfg.output.mode.clone()).ok()?,
+        "output.destination_guard" => json!(cfg.output.destination_guard),
         "output.fallback_to_clipboard" => json!(cfg.output.fallback_to_clipboard),
         "output.auto_submit" => json!(cfg.output.auto_submit),
         "output.shift_enter_newlines" => json!(cfg.output.shift_enter_newlines),
@@ -2056,7 +2062,18 @@ mod tests {
     fn every_key_round_trips_through_the_config_loader() {
         for s in scalar_keys() {
             let (_dir, path) = temp_config();
-            let value = sample(s);
+            let value = if s.key == "output.destination_guard" {
+                // This opt-in has cross-field/platform requirements. Exercise
+                // the real loader with a supported configuration, not defaults.
+                if cfg!(target_os = "linux") {
+                    std::fs::write(&path, "engine = 'deepgram'\n[output]\nmode = 'paste'\n[deepgram]\nstreaming = true\ntype_partials = false\n").unwrap();
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            } else {
+                sample(s)
+            };
             let typed = validate_value(s, &value)
                 .unwrap_or_else(|e| panic!("sample '{}' rejected for {}: {}", value, s.key, e));
 

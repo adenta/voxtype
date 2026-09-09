@@ -170,6 +170,21 @@ impl Config {
                 .is_some_and(|deepgram| deepgram.streaming && !deepgram.type_partials)
     }
 
+    /// v1 supports the single final paste emitted by buffered Deepgram only.
+    pub fn validate_destination_guard(&self) -> Result<(), crate::error::VoxtypeError> {
+        if self.output.destination_guard
+            && (!cfg!(target_os = "linux")
+                || self.output.mode != super::OutputMode::Paste
+                || !self.streaming_buffers_output()
+                || self.output.driver_order.is_some())
+        {
+            return Err(crate::error::VoxtypeError::Config(
+                "output.destination_guard requires Linux, output.mode = paste, Deepgram streaming = true, type_partials = false, and no driver_order override".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Clone this config with engine-specific overrides for meeting (long-form)
     /// transcription. Currently:
     ///

@@ -10,12 +10,14 @@
 //!   - eitype: EI protocol, works on GNOME/KDE/Sway with libei
 //!   - ydotool: Works on X11/Wayland/TTY, requires ydotoold daemon
 
+use super::destination_guard::{BlockReason, DestinationGuard};
 use super::session::{detect, DisplaySession};
-use super::TextOutput;
+use super::{OutputDelivery, TextOutput};
 use crate::error::OutputError;
 use crate::output::find_ydotool_socket;
 use crate::output::xclip::copy_to_x11_clipboard;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -196,6 +198,7 @@ impl std::fmt::Debug for ClipboardContent {
 
 /// Paste-based text output (clipboard + paste keystroke)
 pub struct PasteOutput {
+    destination_guard: Option<Arc<DestinationGuard>>,
     /// Whether to send Enter key after output
     auto_submit: bool,
     /// Text to append after transcription (before auto_submit)
@@ -236,6 +239,7 @@ impl PasteOutput {
         tracing::debug!("Paste keystroke configured: {:?}", keystroke);
 
         Self {
+            destination_guard: None,
             auto_submit,
             append_text,
             keystroke,
@@ -244,6 +248,49 @@ impl PasteOutput {
             restore_clipboard,
             restore_clipboard_delay_ms,
         }
+    }
+
+    pub fn with_destination_guard(mut self, guard: Option<Arc<DestinationGuard>>) -> Self {
+        self.destination_guard = guard;
+        self
+    }
+
+    async fn block_reason(&self) -> Option<BlockReason> {
+        match &self.destination_guard {
+            Some(guard) => guard.check().await,
+            None => None,
+        }
+    }
+
+    async fn ensure_destination(&self) -> Result<(), OutputError> {
+        if self.block_reason().await.is_some() {
+            return Err(OutputError::DestinationBlocked);
+        }
+        Ok(())
+    }
+
+    async fn copy_blocked(
+        &self,
+        text: &str,
+        reason: BlockReason,
+    ) -> Result<OutputDelivery, OutputError> {
+        // Deliberate clipboard delivery: do not restore the old clipboard, and
+        // do not mark the transcript as transient/sensitive paste transport.
+        let clipboard = super::clipboard::ClipboardOutput::new(self.append_text.clone());
+        if let Err(error) = clipboard.output(text).await {
+            crate::notification::send(
+                "Voxtype",
+                "Paste blocked, but copying dictation to the clipboard failed.",
+            )
+            .await;
+            return Err(error);
+        }
+        tracing::info!(
+            ?reason,
+            "Destination guard delivered dictation to clipboard"
+        );
+        crate::notification::send("Voxtype", reason.message()).await;
+        Ok(OutputDelivery::Clipboard)
     }
 
     /// Copy text to clipboard, dispatching by session type.
@@ -597,6 +644,7 @@ impl PasteOutput {
 
     /// Simulate paste keystroke using wtype
     async fn simulate_paste_wtype(&self) -> Result<(), OutputError> {
+        self.ensure_destination().await?;
         let args = self.keystroke.to_wtype_args();
         tracing::debug!("Running: wtype {}", args.join(" "));
 
@@ -627,6 +675,7 @@ impl PasteOutput {
 
     /// Simulate paste keystroke using eitype
     async fn simulate_paste_eitype(&self) -> Result<(), OutputError> {
+        self.ensure_destination().await?;
         let args = self.keystroke.to_eitype_args();
         tracing::debug!("Running: eitype {}", args.join(" "));
 
@@ -657,6 +706,7 @@ impl PasteOutput {
 
     /// Simulate paste keystroke using ydotool
     async fn simulate_paste_ydotool(&self) -> Result<(), OutputError> {
+        self.ensure_destination().await?;
         let args = self.keystroke.to_ydotool_args().map_err(|e| {
             OutputError::CtrlVFailed(format!("Cannot convert keystroke for ydotool: {}", e))
         })?;
@@ -716,6 +766,9 @@ impl PasteOutput {
                     tracing::debug!("Paste keystroke sent via wtype");
                     return Ok(());
                 }
+                Err(OutputError::DestinationBlocked) => {
+                    return Err(OutputError::DestinationBlocked)
+                }
                 Err(e) => {
                     tracing::debug!("wtype paste failed: {}, trying eitype", e);
                 }
@@ -728,6 +781,9 @@ impl PasteOutput {
                 Ok(()) => {
                     tracing::debug!("Paste keystroke sent via eitype");
                     return Ok(());
+                }
+                Err(OutputError::DestinationBlocked) => {
+                    return Err(OutputError::DestinationBlocked)
                 }
                 Err(e) => {
                     tracing::debug!("eitype paste failed: {}, trying ydotool", e);
@@ -758,6 +814,7 @@ impl PasteOutput {
     async fn send_enter(&self) -> Result<(), OutputError> {
         // Try wtype first
         if self.is_wtype_available().await {
+            self.ensure_destination().await?;
             let output = Command::new("wtype")
                 .args(["-k", "Return"])
                 .stdout(Stdio::null())
@@ -774,6 +831,7 @@ impl PasteOutput {
 
         // Try eitype
         if self.is_eitype_available().await {
+            self.ensure_destination().await?;
             let output = Command::new("eitype")
                 .args(["-k", "return"])
                 .stdout(Stdio::null())
@@ -794,6 +852,7 @@ impl PasteOutput {
             if let Some(socket) = find_ydotool_socket() {
                 cmd.env("YDOTOOL_SOCKET", socket);
             }
+            self.ensure_destination().await?;
             let output = cmd
                 .args(["key", "28:1", "28:0"])
                 .stdout(Stdio::null())
@@ -817,8 +876,15 @@ impl PasteOutput {
 #[async_trait::async_trait]
 impl TextOutput for PasteOutput {
     async fn output(&self, text: &str) -> Result<(), OutputError> {
+        self.output_delivery(text).await.map(|_| ())
+    }
+
+    async fn output_delivery(&self, text: &str) -> Result<OutputDelivery, OutputError> {
         if text.is_empty() {
-            return Ok(());
+            return Ok(OutputDelivery::Clipboard);
+        }
+        if let Some(reason) = self.block_reason().await {
+            return self.copy_blocked(text, reason).await;
         }
 
         // Save original clipboard content if restoration is enabled
@@ -861,11 +927,34 @@ impl TextOutput for PasteOutput {
         tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;
 
         // Step 2: Simulate paste keystroke
-        self.simulate_paste_keystroke().await?;
+        // Check after the settling delay and again immediately before each
+        // driver's keystrokes. A block is terminal, never a driver failure.
+        let paste_result = match self.ensure_destination().await {
+            Ok(()) => self.simulate_paste_keystroke().await,
+            Err(error) => Err(error),
+        };
+        match paste_result {
+            Err(OutputError::DestinationBlocked) => {
+                let reason = self
+                    .block_reason()
+                    .await
+                    .unwrap_or(BlockReason::DetectionFailed);
+                return self.copy_blocked(text, reason).await;
+            }
+            other => other?,
+        }
 
-        // Send Enter key if configured
         if self.auto_submit {
-            self.send_enter().await?;
+            match self.send_enter().await {
+                Err(OutputError::DestinationBlocked) => {
+                    crate::notification::send(
+                        "Voxtype",
+                        "Destination changed after paste—automatic submission skipped.",
+                    )
+                    .await;
+                }
+                other => other?,
+            }
         }
 
         // Restore original clipboard content if we saved something
@@ -897,10 +986,16 @@ impl TextOutput for PasteOutput {
                 + &self.keystroke.key,
             text.len()
         );
-        Ok(())
+        Ok(OutputDelivery::Inserted)
     }
 
     async fn is_available(&self) -> bool {
+        // Even without a keyboard driver, a guarded recording can still be
+        // delivered to the clipboard. Report actual copy errors from output.
+        if self.destination_guard.is_some() {
+            return true;
+        }
+
         // Probe the appropriate clipboard tool for the active session.
         // Wayland needs wl-copy; X11 needs xclip or xsel.
         let session = detect();
