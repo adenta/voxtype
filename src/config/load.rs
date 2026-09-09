@@ -204,6 +204,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
         config.text.filter_filler_words = parse_bool_env(&val);
     }
 
+    config.validate_destination_guard()?;
     Ok(config)
 }
 

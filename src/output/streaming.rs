@@ -120,9 +120,10 @@ impl StreamingSession {
             wait_for_modifier_release: false,
             modifier_release_timeout: std::time::Duration::from_millis(0),
         };
-        output_with_fallback(chain, &new_partial, opts).await?;
-
-        self.typed_chars += new_partial.chars().count();
+        let delivery = output_with_fallback(chain, &new_partial, opts).await?;
+        if delivery == super::OutputDelivery::Inserted {
+            self.typed_chars += new_partial.chars().count();
+        }
         self.partial.push_str(&new_partial);
         Ok(())
     }
@@ -189,9 +190,10 @@ impl StreamingSession {
             wait_for_modifier_release: false,
             modifier_release_timeout: std::time::Duration::from_millis(0),
         };
-        output_with_fallback(chain, text, opts).await?;
-
-        self.typed_chars += text.chars().count();
+        let delivery = output_with_fallback(chain, text, opts).await?;
+        if delivery == super::OutputDelivery::Inserted {
+            self.typed_chars += text.chars().count();
+        }
         // Treat the partial-stream-so-far plus this final tail as the
         // committed text for cancel-rewind context.
         let finalized_tail = format!("{}{}", self.partial, text);
@@ -247,8 +249,10 @@ impl StreamingSession {
                 wait_for_modifier_release: false,
                 modifier_release_timeout: std::time::Duration::from_millis(0),
             };
-            output_with_fallback(chain, text, opts).await?;
-            self.typed_chars += text.chars().count();
+            let delivery = output_with_fallback(chain, text, opts).await?;
+            if delivery == super::OutputDelivery::Inserted {
+                self.typed_chars += text.chars().count();
+            }
         }
         // Treat the (now-truncated) partial plus any replacement text as
         // committed. `text` may be empty when the final transcript is a

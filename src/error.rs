@@ -115,6 +115,9 @@ pub enum VadError {
 /// Errors related to text output
 #[derive(Error, Debug)]
 pub enum OutputError {
+    #[error("Paste blocked by destination guard")]
+    DestinationBlocked,
+
     #[error("ydotool daemon not running.\n  Start with: systemctl --user start ydotool\n  Enable at boot: systemctl --user enable ydotool")]
     YdotoolNotRunning,
 

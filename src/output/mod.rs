@@ -22,6 +22,7 @@
 #[cfg(target_os = "macos")]
 pub mod cgevent;
 pub mod clipboard;
+pub mod destination_guard;
 pub mod dotool;
 pub mod eitype;
 // modifier_guard is evdev-based; macOS has its own osascript modifier handling.
@@ -226,11 +227,30 @@ pub async fn send_transcription_notification(
     .await;
 }
 
-/// Trait for text output implementations
+/// Where the text was delivered, for safe streaming cancellation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputDelivery {
+    Inserted,
+    Clipboard,
+}
+
+/// Trait for text output implementations.
 #[async_trait::async_trait]
 pub trait TextOutput: Send + Sync {
     /// Output text (type it or copy to clipboard)
     async fn output(&self, text: &str) -> Result<(), OutputError>;
+
+    /// Preserve the delivery destination so streaming never rewinds copied text.
+    async fn output_delivery(&self, text: &str) -> Result<OutputDelivery, OutputError> {
+        self.output(text).await?;
+        Ok(
+            if self.name().starts_with("clipboard") || self.name().starts_with("xclip") {
+                OutputDelivery::Clipboard
+            } else {
+                OutputDelivery::Inserted
+            },
+        )
+    }
 
     /// Check if this output method is available
     async fn is_available(&self) -> bool;
@@ -305,6 +325,15 @@ pub fn create_output_chain(config: &OutputConfig) -> Vec<Box<dyn TextOutput>> {
 pub fn create_output_chain_with_override(
     config: &OutputConfig,
     driver_override: Option<&[OutputDriver]>,
+) -> Vec<Box<dyn TextOutput>> {
+    create_output_chain_with_guard(config, driver_override, None)
+}
+
+/// The guard is owned by the recording's output chain and drops on cancellation.
+pub fn create_output_chain_with_guard(
+    config: &OutputConfig,
+    driver_override: Option<&[OutputDriver]>,
+    guard: Option<std::sync::Arc<destination_guard::DestinationGuard>>,
 ) -> Vec<Box<dyn TextOutput>> {
     let mut chain: Vec<Box<dyn TextOutput>> = Vec::new();
     #[cfg(target_os = "macos")]
@@ -392,15 +421,24 @@ pub fn create_output_chain_with_override(
         }
         crate::config::OutputMode::Paste => {
             // Only paste mode (no fallback as requested)
-            chain.push(Box::new(paste::PasteOutput::new(
-                config.auto_submit,
-                config.append_text.clone(),
-                config.paste_keys.clone(),
-                config.type_delay_ms,
-                pre_type_delay_ms,
-                config.restore_clipboard,
-                config.restore_clipboard_delay_ms,
-            )));
+            chain.push(Box::new(
+                paste::PasteOutput::new(
+                    config.auto_submit,
+                    config.append_text.clone(),
+                    config.paste_keys.clone(),
+                    config.type_delay_ms,
+                    pre_type_delay_ms,
+                    config.restore_clipboard,
+                    config.restore_clipboard_delay_ms,
+                )
+                .with_destination_guard(if config.destination_guard {
+                    Some(guard.unwrap_or_else(|| {
+                        std::sync::Arc::new(destination_guard::DestinationGuard::unavailable())
+                    }))
+                } else {
+                    None
+                }),
+            ));
         }
         crate::config::OutputMode::File => {
             // File output is handled in the daemon before reaching the output chain.
@@ -464,7 +502,7 @@ pub async fn output_with_fallback(
     chain: &[Box<dyn TextOutput>],
     text: &str,
     options: OutputOptions<'_>,
-) -> Result<(), OutputError> {
+) -> Result<OutputDelivery, OutputError> {
     // Normalize curly quotes to ASCII to prevent line break issues with keyboard tools
     let normalized_text = normalize_quotes(text);
 
@@ -527,13 +565,18 @@ pub async fn output_with_fallback(
             continue;
         }
 
-        match output.output(&normalized_text).await {
-            Ok(()) => {
+        match output.output_delivery(&normalized_text).await {
+            Ok(delivery) => {
                 tracing::debug!("Text output via {}", output.name());
-                result = Ok(());
+                result = Ok(delivery);
                 break;
             }
             Err(e) => {
+                // Never bypass a blocked/failed paste delivery via another driver.
+                if output.name().starts_with("paste") {
+                    result = Err(e);
+                    break;
+                }
                 tracing::warn!("{} failed: {}, trying next", output.name(), e);
             }
         }

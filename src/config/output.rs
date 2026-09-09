@@ -19,6 +19,10 @@ pub struct OutputConfig {
     #[serde(default)]
     pub mode: OutputMode,
 
+    /// Guard buffered paste against Hyprland window changes and Omarchy authentication.
+    #[serde(default)]
+    pub destination_guard: bool,
+
     /// Fall back to clipboard if typing fails
     #[serde(default = "default_true")]
     pub fallback_to_clipboard: bool,
@@ -182,6 +186,7 @@ impl Default for OutputConfig {
     fn default() -> Self {
         Self {
             mode: OutputMode::default(),
+            destination_guard: false,
             fallback_to_clipboard: true,
             driver_order: None,
             notification: NotificationConfig::default(),
